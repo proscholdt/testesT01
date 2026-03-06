@@ -32,6 +32,7 @@ else:
     DB_PATH = DATA_DIR / "crm.db"
 
 DB_BACKEND = "postgres" if POSTGRES_URL else "sqlite"
+STARTUP_DB_NOTE = "ok"
 
 DB_INTEGRITY_ERRORS: tuple[type[BaseException], ...] = (sqlite3.IntegrityError,)
 if psycopg is not None:
@@ -2358,11 +2359,32 @@ def summary() -> Any:
     return jsonify({"cadastros": total_cadastros, "oportunidades": total_oportunidades})
 
 
+@app.get("/api/db-status")
+def db_status() -> Any:
+    with get_connection() as conn:
+        oportunidades = conn.execute("SELECT COUNT(*) FROM oportunidades_erp").fetchone()[0]
+        historico = conn.execute("SELECT COUNT(*) FROM oportunidades_erp_historico").fetchone()[0]
+
+    return jsonify(
+        {
+            "backend": DB_BACKEND,
+            "is_vercel": IS_VERCEL,
+            "has_postgres_url": bool(POSTGRES_URL),
+            "startup_note": STARTUP_DB_NOTE,
+            "counts": {
+                "oportunidades_erp": oportunidades,
+                "oportunidades_erp_historico": historico,
+            },
+        }
+    )
+
+
 try:
     init_db()
 except Exception as exc:
     if DB_BACKEND == "postgres":
         # Prevent a hard crash on bad Postgres env/connection in serverless startup.
+        STARTUP_DB_NOTE = f"postgres_init_failed_fallback_sqlite: {exc}"
         print(f"[startup] Postgres init failed, falling back to SQLite: {exc}")
         DB_BACKEND = "sqlite"
         if IS_VERCEL:
