@@ -17,7 +17,7 @@ except Exception:  # pragma: no cover - optional dependency in local sqlite mode
     dict_row = None
 
 BASE_DIR = Path(__file__).resolve().parent
-POSTGRES_URL = os.getenv("POSTGRES_URL")
+POSTGRES_URL = os.getenv("POSTGRES_URL_NON_POOLING") or os.getenv("POSTGRES_URL")
 IS_VERCEL = os.getenv("VERCEL") == "1"
 
 if POSTGRES_URL:
@@ -2358,7 +2358,22 @@ def summary() -> Any:
     return jsonify({"cadastros": total_cadastros, "oportunidades": total_oportunidades})
 
 
-init_db()
+try:
+    init_db()
+except Exception as exc:
+    if DB_BACKEND == "postgres":
+        # Prevent a hard crash on bad Postgres env/connection in serverless startup.
+        print(f"[startup] Postgres init failed, falling back to SQLite: {exc}")
+        DB_BACKEND = "sqlite"
+        if IS_VERCEL:
+            DATA_DIR = Path("/tmp") / "data"
+            DB_PATH = DATA_DIR / "crm.db"
+        else:
+            DATA_DIR = BASE_DIR / "data"
+            DB_PATH = DATA_DIR / "crm.db"
+        init_db()
+    else:
+        raise
 
 
 if __name__ == "__main__":
