@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Propostas GO - ERP CRM Local</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="container">
+    <header class="hero">
+      <h1>Propostas GO</h1>
+      <p>Proposta = oportunidade com decisao GO.</p>
+      <p><a class="nav-link" href="/">Voltar para Tela Principal</a></p>
+    </header>
+
+    <section class="card compact" id="go-opps-panel">
+      <div class="card-head">
+        <h2>Propostas GO</h2>
+        <button id="refresh-go-opps" type="button">Atualizar</button>
+      </div>
+      <div class="table-wrap wide-table-wrap">
+        <table class="wide-proposals-table">
+          <thead>
+            <tr id="go-opps-head-row">
+              <th>CODIGO_PROPOSTA</th>
+              <th>VERSAO</th>
+              <th>CLIENTE</th>
+              <th>OBJETO</th>
+              <th>STATUS_Proposta</th>
+              <th>Valor_Proposta</th>
+              <th>Data_Envio</th>
+              <th>Responsavel</th>
+              <th>Canal</th>
+              <th>Observacao</th>
+              <th>Acoes</th>
+            </tr>
+          </thead>
+          <tbody id="go-opps-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card compact" id="go-history-panel" style="display:none;">
+      <div class="card-head">
+        <h2 id="go-history-title">Historico de Propostas</h2>
+        <button id="close-go-history-btn" type="button" class="secondary">Fechar</button>
+      </div>
+      <div class="table-wrap wide-table-wrap">
+        <table class="wide-proposals-table">
+          <thead>
+            <tr id="go-history-head-row">
+              <th>CODIGO_PROPOSTA</th>
+              <th>VERSAO</th>
+              <th>Snapshot Em</th>
+              <th>CLIENTE</th>
+              <th>OBJETO</th>
+              <th>STATUS_Proposta</th>
+              <th>Valor_Proposta</th>
+              <th>Data_Envio</th>
+              <th>Responsavel</th>
+              <th>Canal</th>
+              <th>Observacao</th>
+            </tr>
+          </thead>
+          <tbody id="go-history-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="modal-overlay" id="go-view-modal" style="display:none;">
+      <article class="modal-card">
+        <div class="card-head">
+          <h2 id="go-view-title">Detalhes da Proposta</h2>
+          <button id="close-go-view-btn" type="button" class="secondary">Fechar</button>
+        </div>
+        <div id="go-view-body" class="proposal-view-grid"></div>
+      </article>
+    </section>
+
+    <section class="card compact" id="go-edit-panel" style="display:none;">
+      <div class="card-head">
+        <h2 id="go-edit-title">Editar Proposta</h2>
+        <button id="cancel-go-edit-btn" type="button" class="secondary">Fechar</button>
+      </div>
+
+      <form id="go-edit-form" class="form-grid">
+        <input type="hidden" name="oportunidade_id" id="go-edit-oportunidade-id">
+
+        <label>Status_Proposta
+          <select name="status_proposta_id" id="go-edit-status-proposta-id"></select>
+        </label>
+        <label>Valor
+          <input type="number" step="0.01" min="0" name="valor" id="go-edit-valor">
+        </label>
+        <label id="go-edit-date-field-wrap"><span id="go-edit-date-field-label">Data_Envio</span>
+          <input type="date" name="data_envio" id="go-edit-data-envio">
+        </label>
+
+        <label>Responsavel1
+          <select name="responsavel_1_id" id="go-edit-responsavel-1-id"></select>
+        </label>
+
+        <label>Responsavel2
+          <select name="responsavel_2_id" id="go-edit-responsavel-2-id"></select>
+        </label>
+
+        <label class="full">Observacao
+          <textarea rows="3" name="observacao_proposta" id="go-edit-observacao"></textarea>
+        </label>
+
+        <div class="full inline-actions">
+          <button type="submit" id="save-go-edit-btn">Salvar Edicao</button>
+          <button type="button" id="cancel-go-edit-btn-2" class="secondary">Cancelar</button>
+        </div>
+      </form>
+
+      <p id="go-edit-result" class="muted"></p>
+    </section>
+  </main>
+
+  <script src="/static/propostas.js"></script>
+</body>
+</html>

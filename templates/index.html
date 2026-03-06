@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ERP CRM Local</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="container">
+    <header class="hero">
+      <h1>ERP CRM Local</h1>
+      <p>Cadastros mestres e lancamento de oportunidades operacionais.</p>
+      <p><a class="nav-link" href="/propostas">Abrir Tela Propostas GO</a></p>
+    </header>
+
+    <section class="grid-main">
+      <article class="card">
+        <div class="card-head">
+          <h2 id="master-form-title">Cadastros Mestres</h2>
+          <button id="refresh-master-btn" type="button">Atualizar</button>
+        </div>
+
+        <form id="master-form" class="form-grid">
+          <input type="hidden" id="master-record-id" name="master_record_id">
+          <label class="full">Cadastro
+            <select id="master-name" required></select>
+          </label>
+          <div id="master-fields" class="full form-grid"></div>
+          <div class="full inline-actions">
+            <button type="submit" id="save-master-btn">Salvar Cadastro</button>
+            <button type="button" id="cancel-master-edit-btn" class="secondary" style="display:none;">Cancelar Edicao</button>
+          </div>
+        </form>
+
+        <p id="master-result" class="muted"></p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr id="master-table-head-row"></tr>
+            </thead>
+            <tbody id="master-table-body"></tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h2 id="opp-form-title">Cadastro de Oportunidade</h2>
+        </div>
+
+        <form id="opp-form" class="form-grid">
+          <input type="hidden" name="oportunidade_id" id="oportunidade_id">
+          <label>Data de Entrada*
+            <input name="data_entrada" type="date" required>
+          </label>
+
+          <label>Cliente*
+            <select name="cliente_id" id="fk-cliente_id" required></select>
+          </label>
+          <label>Segmento
+            <select name="segmento_id" id="fk-segmento_id"></select>
+          </label>
+          <label>Canal*
+            <select name="canal_id" id="fk-canal_id" required></select>
+          </label>
+
+          <label>Responsavel 1*
+            <select name="responsavel_1_id" id="fk-responsavel_1_id" required></select>
+          </label>
+          <label>Responsavel 2
+            <select name="responsavel_2_id" id="fk-responsavel_2_id"></select>
+          </label>
+          <label>Categoria*
+            <select name="categoria_id" id="fk-categoria_id" required></select>
+          </label>
+          <label>Area de Negocio*
+            <select name="area_negocio_id" id="fk-area_negocio_id" required></select>
+          </label>
+
+          <label>Estado*
+            <select name="estado_id" id="fk-estado_id" required></select>
+          </label>
+
+          <label class="full">Observacoes/Acompanhamento
+            <textarea name="observacoes_acompanhamento" rows="3"></textarea>
+          </label>
+
+          <div class="full inline-actions">
+            <button type="submit" id="save-opp-btn">Salvar Oportunidade</button>
+            <button type="button" id="cancel-edit-btn" class="secondary" style="display:none;">Cancelar Edicao</button>
+          </div>
+        </form>
+
+        <p id="opp-result" class="muted"></p>
+      </article>
+    </section>
+
+    <section class="card compact">
+      <div class="card-head">
+        <h2>Todas Oportunidades</h2>
+        <button id="refresh-all-props" type="button">Atualizar</button>
+      </div>
+      <div class="table-wrap wide-table-wrap">
+        <table class="wide-proposals-table">
+          <thead>
+            <tr>
+              <th>Id</th>
+              <th>Cod Oportunidade</th>
+              <th>Versao</th>
+              <th>Data Entrada</th>
+              <th>Cliente</th>
+              <th>Segmento</th>
+              <th>Decisao</th>
+              <th>Justificativa</th>
+              <th>Canal</th>
+              <th>Responsavel 1</th>
+              <th>Responsavel 2</th>
+              <th>Categoria</th>
+              <th>Area Negocio</th>
+              <th>UF</th>
+              <th>Observacoes</th>
+              <th>Acoes</th>
+            </tr>
+          </thead>
+          <tbody id="all-props-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card compact" id="decisao-panel" style="display:none;">
+      <div class="card-head">
+        <h2 id="decisao-title">Alterar Estado da Decisao</h2>
+        <button id="close-decisao-btn" type="button" class="secondary">Fechar</button>
+      </div>
+
+      <form id="decisao-form" class="form-grid">
+        <input type="hidden" id="decisao-oportunidade-id" name="oportunidade_id">
+        <label>Decisao*
+          <select id="decisao-update-id" name="decisao_id" required></select>
+        </label>
+        <label>Justificativa
+          <select id="justificativa-update-id" name="justificativa_id"></select>
+        </label>
+        <div class="full inline-actions">
+          <button type="submit">Salvar Decisao</button>
+          <button id="cancel-decisao-btn" type="button" class="secondary">Cancelar</button>
+        </div>
+      </form>
+
+      <p id="decisao-result" class="muted"></p>
+    </section>
+
+    <section class="card compact" id="history-panel" style="display:none;">
+      <div class="card-head">
+        <h2 id="history-title">Historico de Oportunidades</h2>
+        <button id="close-history-btn" type="button" class="secondary">Fechar</button>
+      </div>
+      <div class="table-wrap wide-table-wrap">
+        <table class="wide-proposals-table">
+          <thead>
+            <tr>
+              <th>Versao</th>
+              <th>Snapshot Em</th>
+              <th>Cod Oportunidade</th>
+              <th>Cod Proposta</th>
+              <th>Data Entrada</th>
+              <th>Cliente</th>
+              <th>Segmento</th>
+              <th>Decisao</th>
+              <th>Justificativa</th>
+              <th>Canal</th>
+              <th>Responsavel 1</th>
+              <th>Responsavel 2</th>
+              <th>Categoria</th>
+              <th>Area Negocio</th>
+              <th>UF</th>
+              <th>Observacoes</th>
+            </tr>
+          </thead>
+          <tbody id="history-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
