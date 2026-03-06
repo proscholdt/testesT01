@@ -17,9 +17,20 @@ except Exception:  # pragma: no cover - optional dependency in local sqlite mode
     dict_row = None
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-DB_PATH = DATA_DIR / "crm.db"
 POSTGRES_URL = os.getenv("POSTGRES_URL")
+IS_VERCEL = os.getenv("VERCEL") == "1"
+
+if POSTGRES_URL:
+    DATA_DIR = BASE_DIR / "data"
+    DB_PATH = DATA_DIR / "crm.db"
+elif IS_VERCEL:
+    # Vercel file system is read-only except /tmp.
+    DATA_DIR = Path("/tmp") / "data"
+    DB_PATH = DATA_DIR / "crm.db"
+else:
+    DATA_DIR = BASE_DIR / "data"
+    DB_PATH = DATA_DIR / "crm.db"
+
 DB_BACKEND = "postgres" if POSTGRES_URL else "sqlite"
 
 DB_INTEGRITY_ERRORS: tuple[type[BaseException], ...] = (sqlite3.IntegrityError,)
