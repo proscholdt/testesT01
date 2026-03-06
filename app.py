@@ -168,10 +168,13 @@ class DbConnection:
         if self._backend == "postgres" and text.lstrip().upper().startswith("INSERT"):
             try:
                 aux = self._conn.cursor()
-                aux.execute("SELECT LASTVAL()")
+                aux.execute("SELECT LASTVAL() AS lastval")
                 row = aux.fetchone()
                 if row is not None:
-                    lastrowid = int(row[0])
+                    if isinstance(row, dict):
+                        lastrowid = to_int(row.get("lastval"))
+                    else:
+                        lastrowid = to_int(row[0])
             except Exception:
                 lastrowid = None
 
@@ -826,6 +829,28 @@ def parse_iso_date(value: Any) -> str | None:
         return None
 
 
+def row_value(row: Any, key: str | None = None, index: int = 0) -> Any:
+    if row is None:
+        return None
+    if key is not None:
+        try:
+            return row[key]
+        except Exception:
+            pass
+    try:
+        return row[index]
+    except Exception:
+        return None
+
+
+def row_int(row: Any, key: str | None = None, index: int = 0, default: int = 0) -> int:
+    value = row_value(row, key=key, index=index)
+    parsed = to_int(value)
+    if parsed is None:
+        return default
+    return parsed
+
+
 def format_version_label(value: Any) -> str | None:
     if value is None:
         return None
@@ -854,9 +879,7 @@ def next_proposta_version(conn: sqlite3.Connection, oportunidade_id: int) -> int
         """,
         (oportunidade_id,),
     ).fetchone()
-    current = 0
-    if row is not None and row[0] is not None:
-        current = int(row[0])
+    current = row_int(row, key=None, index=0, default=0)
     return current + 1
 
 
@@ -900,7 +923,7 @@ def get_or_create_status_cliente_id(conn: sqlite3.Connection, status_nome: str) 
         (status_nome,),
     ).fetchone()
     if row is not None:
-        return int(row[0])
+        return row_int(row, key="status_cliente_id", index=0, default=0)
 
     cur = conn.execute("INSERT INTO status_cliente (nome) VALUES (?)", (status_nome,))
     return int(cur.lastrowid)
@@ -917,7 +940,7 @@ def next_id_oportunidade(conn: sqlite3.Connection) -> str:
 
     max_seq = 0
     for row in rows:
-        value = row[0]
+        value = row_value(row, key="id_oportunidade", index=0)
         if value is None:
             continue
         text = str(value)
@@ -942,7 +965,7 @@ def next_codigo_proposta(conn: sqlite3.Connection) -> str:
 
     max_seq = 0
     for row in rows:
-        value = row[0]
+        value = row_value(row, key="codigo_proposta", index=0)
         if value is None:
             continue
         text = str(value)
@@ -1377,7 +1400,7 @@ def update_proposta_campos(oportunidade_id: int) -> Any:
                 "SELECT nome FROM decisoes WHERE decisao_id = ?",
                 (exists["decisao_id"],),
             ).fetchone()
-            if decisao_row is None or not is_go_decisao(str(decisao_row[0])):
+            if decisao_row is None or not is_go_decisao(str(row_value(decisao_row, key="nome", index=0) or "")):
                 return jsonify({"error": "Apenas propostas GO podem ser editadas nesta tela."}), 400
 
             conn.execute(
@@ -1447,7 +1470,7 @@ def update_proposta_campos(oportunidade_id: int) -> Any:
             ).fetchone()
 
             if updated is not None:
-                conn.execute(
+                hist_cur = conn.execute(
                     """
                     INSERT INTO oportunidades_erp_historico (
                         oportunidade_id_ref, versao, snapshot_at,
@@ -1505,9 +1528,11 @@ def update_proposta_campos(oportunidade_id: int) -> Any:
                         updated["updated_at"],
                     ),
                 )
-                conn.execute(
-                    "UPDATE oportunidades_erp_historico SET origem_historico = 'proposta' WHERE historico_id = last_insert_rowid()"
-                )
+                if hist_cur.lastrowid is not None:
+                    conn.execute(
+                        "UPDATE oportunidades_erp_historico SET origem_historico = ? WHERE historico_id = ?",
+                        ("proposta", int(hist_cur.lastrowid)),
+                    )
             conn.commit()
     except DB_INTEGRITY_ERRORS as exc:
         return jsonify({"error": f"Falha ao atualizar proposta: {exc}"}), 400
@@ -1554,22 +1579,23 @@ def update_oportunidade_decisao(oportunidade_id: int) -> Any:
             if decisao_row is None:
                 return jsonify({"error": "Decisao invalida."}), 400
 
-            decisao_nome = str(decisao_row[0]).strip().upper()
+            decisao_nome = str(row_value(decisao_row, key="nome", index=0) or "").strip().upper()
             decisao_antiga_nome = ""
             if exists["decisao_id"] is not None:
                 antiga_row = conn.execute(
                     "SELECT nome FROM decisoes WHERE decisao_id = ?",
                     (exists["decisao_id"],),
                 ).fetchone()
-                if antiga_row is not None and antiga_row[0] is not None:
-                    decisao_antiga_nome = str(antiga_row[0]).strip().upper()
+                antiga_nome = row_value(antiga_row, key="nome", index=0)
+                if antiga_nome is not None:
+                    decisao_antiga_nome = str(antiga_nome).strip().upper()
             if is_no_go_decisao(decisao_nome):
                 if justificativa_id is None:
                     return jsonify({"error": "Para decisao NO-GO, justificativa e obrigatoria."}), 400
             else:
                 justificativa_id = None
 
-            conn.execute(
+            hist_cur = conn.execute(
                 """
                 INSERT INTO oportunidades_erp_historico (
                     oportunidade_id_ref, versao, snapshot_at,
@@ -1625,9 +1651,11 @@ def update_oportunidade_decisao(oportunidade_id: int) -> Any:
                     exists["updated_at"],
                 ),
             )
-            conn.execute(
-                "UPDATE oportunidades_erp_historico SET origem_historico = 'oportunidade' WHERE historico_id = last_insert_rowid()"
-            )
+            if hist_cur.lastrowid is not None:
+                conn.execute(
+                    "UPDATE oportunidades_erp_historico SET origem_historico = ? WHERE historico_id = ?",
+                    ("oportunidade", int(hist_cur.lastrowid)),
+                )
 
             conn.execute(
                 """
@@ -1670,7 +1698,7 @@ def update_oportunidade_decisao(oportunidade_id: int) -> Any:
             ).fetchone()
 
             if atual is not None:
-                conn.execute(
+                hist_cur = conn.execute(
                     """
                     INSERT INTO oportunidades_erp_historico (
                         oportunidade_id_ref, versao, snapshot_at,
@@ -1726,9 +1754,11 @@ def update_oportunidade_decisao(oportunidade_id: int) -> Any:
                         atual["updated_at"],
                     ),
                 )
-                conn.execute(
-                    "UPDATE oportunidades_erp_historico SET origem_historico = 'oportunidade' WHERE historico_id = last_insert_rowid()"
-                )
+                if hist_cur.lastrowid is not None:
+                    conn.execute(
+                        "UPDATE oportunidades_erp_historico SET origem_historico = ? WHERE historico_id = ?",
+                        ("oportunidade", int(hist_cur.lastrowid)),
+                    )
 
                 # On the first transition to GO, register proposal baseline as V1
                 # so proposal history starts at the transition moment.
@@ -1738,7 +1768,7 @@ def update_oportunidade_decisao(oportunidade_id: int) -> Any:
                         get_proposta_status_dates_for_oportunidade(conn, oportunidade_id),
                         ensure_ascii=True,
                     )
-                    conn.execute(
+                    hist_cur = conn.execute(
                         """
                         INSERT INTO oportunidades_erp_historico (
                             oportunidade_id_ref, versao, snapshot_at,
@@ -1796,9 +1826,11 @@ def update_oportunidade_decisao(oportunidade_id: int) -> Any:
                             atual["updated_at"],
                         ),
                     )
-                    conn.execute(
-                        "UPDATE oportunidades_erp_historico SET origem_historico = 'proposta' WHERE historico_id = last_insert_rowid()"
-                    )
+                    if hist_cur.lastrowid is not None:
+                        conn.execute(
+                            "UPDATE oportunidades_erp_historico SET origem_historico = ? WHERE historico_id = ?",
+                            ("proposta", int(hist_cur.lastrowid)),
+                        )
             conn.commit()
     except DB_INTEGRITY_ERRORS as exc:
         return jsonify({"error": f"Falha ao atualizar decisao: {exc}"}), 400
@@ -1860,7 +1892,7 @@ def create_oportunidade() -> Any:
             if cliente_row is None:
                 return jsonify({"error": "Cliente invalido."}), 400
 
-            status_cliente_id = cliente_row[0]
+            status_cliente_id = row_value(cliente_row, key="status_cliente_id", index=0)
             if status_cliente_id is None:
                 status_cliente_id = get_or_create_status_cliente_id(conn, "Novo")
 
@@ -2253,7 +2285,7 @@ def update_oportunidade(oportunidade_id: int) -> Any:
             if cliente_row is None:
                 return jsonify({"error": "Cliente invalido."}), 400
 
-            status_cliente_id = cliente_row[0]
+            status_cliente_id = row_value(cliente_row, key="status_cliente_id", index=0)
             if status_cliente_id is None:
                 status_cliente_id = get_or_create_status_cliente_id(conn, "Novo")
 
@@ -2272,7 +2304,7 @@ def update_oportunidade(oportunidade_id: int) -> Any:
             if decisao_row is None:
                 return jsonify({"error": "Decisao invalida."}), 400
 
-            decisao_nome = str(decisao_row[0]).strip().upper()
+            decisao_nome = str(row_value(decisao_row, key="nome", index=0) or "").strip().upper()
 
             if is_no_go_decisao(decisao_nome):
                 if fk_values["justificativa_id"] is None:
@@ -2350,10 +2382,12 @@ def summary() -> Any:
     with get_connection() as conn:
         total_cadastros = {}
         for name, cfg in MASTER_CONFIG.items():
-            count = conn.execute(f"SELECT COUNT(*) FROM {cfg['table']}").fetchone()[0]
+            row = conn.execute(f"SELECT COUNT(*) AS total FROM {cfg['table']}").fetchone()
+            count = row_int(row, key="total", index=0, default=0)
             total_cadastros[name] = count
 
-        total_oportunidades = conn.execute("SELECT COUNT(*) FROM oportunidades_erp").fetchone()[0]
+        row = conn.execute("SELECT COUNT(*) AS total FROM oportunidades_erp").fetchone()
+        total_oportunidades = row_int(row, key="total", index=0, default=0)
 
     return jsonify({"cadastros": total_cadastros, "oportunidades": total_oportunidades})
 
@@ -2362,8 +2396,10 @@ def summary() -> Any:
 def db_status() -> Any:
     try:
         with get_connection() as conn:
-            oportunidades = conn.execute("SELECT COUNT(*) FROM oportunidades_erp").fetchone()[0]
-            historico = conn.execute("SELECT COUNT(*) FROM oportunidades_erp_historico").fetchone()[0]
+            row = conn.execute("SELECT COUNT(*) AS total FROM oportunidades_erp").fetchone()
+            oportunidades = row_int(row, key="total", index=0, default=0)
+            row = conn.execute("SELECT COUNT(*) AS total FROM oportunidades_erp_historico").fetchone()
+            historico = row_int(row, key="total", index=0, default=0)
         counts = {
             "oportunidades_erp": oportunidades,
             "oportunidades_erp_historico": historico,
