@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -8,9 +9,22 @@ from typing import Any
 
 from flask import Flask, jsonify, render_template, request
 
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except Exception:  # pragma: no cover - optional dependency in local sqlite mode
+    psycopg = None
+    dict_row = None
+
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "crm.db"
+POSTGRES_URL = os.getenv("POSTGRES_URL")
+DB_BACKEND = "postgres" if POSTGRES_URL else "sqlite"
+
+DB_INTEGRITY_ERRORS: tuple[type[BaseException], ...] = (sqlite3.IntegrityError,)
+if psycopg is not None:
+    DB_INTEGRITY_ERRORS = (sqlite3.IntegrityError, psycopg.IntegrityError)
 
 app = Flask(__name__)
 
@@ -98,14 +112,274 @@ def ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def get_connection() -> sqlite3.Connection:
+class DbCursor:
+    def __init__(self, cursor: Any, lastrowid: int | None = None) -> None:
+        self._cursor = cursor
+        self.lastrowid = lastrowid
+
+    def fetchone(self) -> Any:
+        return self._cursor.fetchone()
+
+    def fetchall(self) -> list[Any]:
+        return self._cursor.fetchall()
+
+
+class DbConnection:
+    def __init__(self, conn: Any, backend: str) -> None:
+        self._conn = conn
+        self._backend = backend
+
+    def _transform_sql(self, sql: str) -> tuple[str, bool]:
+        if self._backend != "postgres":
+            return sql, False
+
+        text = sql
+        used_insert_or_ignore = False
+        marker = "INSERT OR IGNORE INTO"
+        if marker in text.upper():
+            used_insert_or_ignore = True
+            upper_text = text.upper()
+            idx = upper_text.find(marker)
+            if idx >= 0:
+                text = text[:idx] + "INSERT INTO" + text[idx + len(marker):]
+
+        text = text.replace("?", "%s")
+        if used_insert_or_ignore and "ON CONFLICT" not in text.upper():
+            text = text.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
+        return text, used_insert_or_ignore
+
+    def execute(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> DbCursor:
+        text, _ = self._transform_sql(sql)
+        cur = self._conn.cursor()
+        cur.execute(text, tuple(params))
+
+        lastrowid: int | None = None
+        if self._backend == "postgres" and text.lstrip().upper().startswith("INSERT"):
+            try:
+                aux = self._conn.cursor()
+                aux.execute("SELECT LASTVAL()")
+                row = aux.fetchone()
+                if row is not None:
+                    lastrowid = int(row[0])
+            except Exception:
+                lastrowid = None
+
+        return DbCursor(cur, lastrowid=lastrowid)
+
+    def executescript(self, sql_script: str) -> None:
+        if self._backend == "sqlite":
+            self._conn.executescript(sql_script)
+            return
+
+        statements = [stmt.strip() for stmt in sql_script.split(";") if stmt.strip()]
+        for stmt in statements:
+            self.execute(stmt)
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def __enter__(self) -> "DbConnection":
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if exc is not None:
+            self.rollback()
+        else:
+            self.commit()
+        self.close()
+
+
+def get_connection() -> DbConnection:
+    if DB_BACKEND == "postgres":
+        if psycopg is None:
+            raise RuntimeError("psycopg is required when POSTGRES_URL is configured.")
+        conn = psycopg.connect(POSTGRES_URL, row_factory=dict_row)
+        return DbConnection(conn, backend="postgres")
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    return DbConnection(conn, backend="sqlite")
+
+
+def init_db_postgres(conn: DbConnection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS status_cliente (
+            status_cliente_id BIGSERIAL PRIMARY KEY,
+            nome TEXT NOT NULL UNIQUE
+        );
+
+        CREATE TABLE IF NOT EXISTS clientes (
+            cliente_id BIGSERIAL PRIMARY KEY,
+            nome TEXT NOT NULL UNIQUE,
+            status_cliente_id BIGINT REFERENCES status_cliente (status_cliente_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS pessoa_cliente (
+            pessoa_cliente_id BIGSERIAL PRIMARY KEY,
+            cliente_id BIGINT NOT NULL REFERENCES clientes (cliente_id),
+            nome TEXT NOT NULL,
+            UNIQUE (cliente_id, nome)
+        );
+
+        CREATE TABLE IF NOT EXISTS segmentos (
+            segmento_id BIGSERIAL PRIMARY KEY,
+            nome TEXT NOT NULL UNIQUE
+        );
+
+        CREATE TABLE IF NOT EXISTS canais (
+            canal_id BIGSERIAL PRIMARY KEY,
+            nome TEXT NOT NULL UNIQUE
+        );
+
+        CREATE TABLE IF NOT EXISTS responsaveis (
+            responsavel_id BIGSERIAL PRIMARY KEY,
+            nome TEXT NOT NULL UNIQUE
+        );
+
+        CREATE TABLE IF NOT EXISTS categorias (
+            categoria_id BIGSERIAL PRIMARY KEY,
+            nome TEXT NOT NULL UNIQUE
+        );
+
+        CREATE TABLE IF NOT EXISTS areas_negocio (
+            area_negocio_id BIGSERIAL PRIMARY KEY,
+            nome TEXT NOT NULL UNIQUE
+        );
+
+        CREATE TABLE IF NOT EXISTS estados (
+            estado_id BIGSERIAL PRIMARY KEY,
+            uf TEXT NOT NULL UNIQUE
+        );
+
+        CREATE TABLE IF NOT EXISTS decisoes (
+            decisao_id BIGSERIAL PRIMARY KEY,
+            nome TEXT NOT NULL UNIQUE
+        );
+
+        CREATE TABLE IF NOT EXISTS justificativas (
+            justificativa_id BIGSERIAL PRIMARY KEY,
+            nome TEXT NOT NULL UNIQUE
+        );
+
+        CREATE TABLE IF NOT EXISTS status_proposta (
+            status_proposta_id BIGSERIAL PRIMARY KEY,
+            nome TEXT NOT NULL UNIQUE
+        );
+
+        CREATE TABLE IF NOT EXISTS oportunidades_erp (
+            oportunidade_id BIGSERIAL PRIMARY KEY,
+            id_oportunidade TEXT NOT NULL UNIQUE,
+            data_entrada TEXT NOT NULL,
+            cliente_id BIGINT NOT NULL REFERENCES clientes (cliente_id),
+            pessoa_cliente_id BIGINT REFERENCES pessoa_cliente (pessoa_cliente_id),
+            status_cliente_id BIGINT REFERENCES status_cliente (status_cliente_id),
+            segmento TEXT,
+            segmento_id BIGINT REFERENCES segmentos (segmento_id),
+            decisao_id BIGINT REFERENCES decisoes (decisao_id),
+            justificativa_id BIGINT REFERENCES justificativas (justificativa_id),
+            canal_id BIGINT NOT NULL REFERENCES canais (canal_id),
+            responsavel_1_id BIGINT NOT NULL REFERENCES responsaveis (responsavel_id),
+            codigo_proposta TEXT,
+            objeto TEXT,
+            categoria_id BIGINT NOT NULL REFERENCES categorias (categoria_id),
+            area_negocio_id BIGINT REFERENCES areas_negocio (area_negocio_id),
+            estado_id BIGINT NOT NULL REFERENCES estados (estado_id),
+            valor DOUBLE PRECISION,
+            prazo_execucao_meses INTEGER,
+            data_envio TEXT,
+            status_proposta_id BIGINT REFERENCES status_proposta (status_proposta_id),
+            responsavel_2_id BIGINT REFERENCES responsaveis (responsavel_id),
+            ultimo_contato_data TEXT,
+            observacoes_acompanhamento TEXT,
+            versao_atual INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            tipo_evento TEXT,
+            data_evento TEXT,
+            valor_evento DOUBLE PRECISION,
+            observacao_proposta TEXT,
+            nome_contato TEXT,
+            proxima_acao TEXT,
+            farol TEXT,
+            evento_encerrador TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS oportunidades_erp_historico (
+            historico_id BIGSERIAL PRIMARY KEY,
+            oportunidade_id_ref BIGINT NOT NULL REFERENCES oportunidades_erp (oportunidade_id),
+            versao INTEGER NOT NULL,
+            snapshot_at TEXT NOT NULL,
+            id_oportunidade TEXT NOT NULL,
+            codigo_proposta TEXT,
+            data_entrada TEXT NOT NULL,
+            data_envio TEXT,
+            cliente_id BIGINT NOT NULL REFERENCES clientes (cliente_id),
+            pessoa_cliente_id BIGINT,
+            status_cliente_id BIGINT,
+            segmento_id BIGINT,
+            decisao_id BIGINT,
+            justificativa_id BIGINT,
+            canal_id BIGINT NOT NULL,
+            responsavel_1_id BIGINT NOT NULL,
+            responsavel_2_id BIGINT,
+            categoria_id BIGINT NOT NULL,
+            area_negocio_id BIGINT,
+            estado_id BIGINT NOT NULL,
+            status_proposta_id BIGINT,
+            valor DOUBLE PRECISION,
+            prazo_execucao_meses INTEGER,
+            ultimo_contato_data TEXT,
+            objeto TEXT,
+            observacoes_acompanhamento TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            tipo_evento TEXT,
+            data_evento TEXT,
+            valor_evento DOUBLE PRECISION,
+            observacao_proposta TEXT,
+            nome_contato TEXT,
+            proxima_acao TEXT,
+            farol TEXT,
+            evento_encerrador TEXT,
+            origem_historico TEXT,
+            status_datas_json TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS proposta_status_datas (
+            proposta_status_data_id BIGSERIAL PRIMARY KEY,
+            oportunidade_id_ref BIGINT NOT NULL REFERENCES oportunidades_erp (oportunidade_id),
+            status_proposta_id BIGINT NOT NULL REFERENCES status_proposta (status_proposta_id),
+            data_status TEXT NOT NULL,
+            UNIQUE (oportunidade_id_ref, status_proposta_id)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_oportunidades_codigo_proposta
+        ON oportunidades_erp (codigo_proposta)
+        WHERE codigo_proposta IS NOT NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_proposta_status_datas_opp
+        ON proposta_status_datas (oportunidade_id_ref);
+        """
+    )
+
+    conn.execute("INSERT OR IGNORE INTO status_cliente (nome) VALUES ('Novo')")
+    conn.execute("INSERT OR IGNORE INTO status_cliente (nome) VALUES ('Ativo')")
 
 
 def init_db() -> None:
+    if DB_BACKEND == "postgres":
+        with get_connection() as conn:
+            init_db_postgres(conn)
+        return
+
     ensure_dirs()
     with get_connection() as conn:
         conn.executescript(
@@ -803,7 +1077,7 @@ def create_cadastro(name: str) -> Any:
                 )
             conn.commit()
             inserted_id = cur.lastrowid
-    except sqlite3.IntegrityError as exc:
+    except DB_INTEGRITY_ERRORS as exc:
         return jsonify({"error": f"Registro duplicado ou invalido: {exc}"}), 400
 
     return jsonify({"message": "Cadastro salvo.", "id": inserted_id}), 201
@@ -884,7 +1158,7 @@ def update_cadastro(name: str, record_id: int) -> Any:
                 values,
             )
             conn.commit()
-    except sqlite3.IntegrityError as exc:
+    except DB_INTEGRITY_ERRORS as exc:
         return jsonify({"error": f"Falha ao atualizar cadastro: {exc}"}), 400
 
     return jsonify({"message": "Cadastro atualizado com sucesso."})
@@ -1224,7 +1498,7 @@ def update_proposta_campos(oportunidade_id: int) -> Any:
                     "UPDATE oportunidades_erp_historico SET origem_historico = 'proposta' WHERE historico_id = last_insert_rowid()"
                 )
             conn.commit()
-    except sqlite3.IntegrityError as exc:
+    except DB_INTEGRITY_ERRORS as exc:
         return jsonify({"error": f"Falha ao atualizar proposta: {exc}"}), 400
 
     return jsonify({"message": "Proposta atualizada com sucesso."})
@@ -1515,7 +1789,7 @@ def update_oportunidade_decisao(oportunidade_id: int) -> Any:
                         "UPDATE oportunidades_erp_historico SET origem_historico = 'proposta' WHERE historico_id = last_insert_rowid()"
                     )
             conn.commit()
-    except sqlite3.IntegrityError as exc:
+    except DB_INTEGRITY_ERRORS as exc:
         return jsonify({"error": f"Falha ao atualizar decisao: {exc}"}), 400
 
     return jsonify({"message": "Decisao atualizada com sucesso."})
@@ -1628,7 +1902,7 @@ def create_oportunidade() -> Any:
                 tuple(payload.values()),
             )
             conn.commit()
-    except sqlite3.IntegrityError as exc:
+    except DB_INTEGRITY_ERRORS as exc:
         return jsonify({"error": f"Falha ao cadastrar oportunidade: {exc}"}), 400
 
     return jsonify(
@@ -2054,7 +2328,7 @@ def update_oportunidade(oportunidade_id: int) -> Any:
                 ),
             )
             conn.commit()
-    except sqlite3.IntegrityError as exc:
+    except DB_INTEGRITY_ERRORS as exc:
         return jsonify({"error": f"Falha ao atualizar oportunidade: {exc}"}), 400
 
     return jsonify({"message": "Oportunidade atualizada com sucesso."})
@@ -2073,6 +2347,8 @@ def summary() -> Any:
     return jsonify({"cadastros": total_cadastros, "oportunidades": total_oportunidades})
 
 
+init_db()
+
+
 if __name__ == "__main__":
-    init_db()
     app.run(debug=True)
