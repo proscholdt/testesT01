@@ -869,17 +869,36 @@ def format_version_label(value: Any) -> str | None:
     return f"V{numeric}"
 
 
+def parse_version_number(value: Any) -> int:
+    if value is None:
+        return 0
+    text = str(value).strip()
+    if text == "":
+        return 0
+    if text.upper().startswith("V"):
+        text = text[1:].strip()
+    parsed = to_int(text)
+    if parsed is None or parsed <= 0:
+        return 0
+    return parsed
+
+
 def next_proposta_version(conn: sqlite3.Connection, oportunidade_id: int) -> int:
-    row = conn.execute(
+    rows = conn.execute(
         """
-        SELECT COALESCE(MAX(versao), 0)
+        SELECT versao
         FROM oportunidades_erp_historico
         WHERE oportunidade_id_ref = ?
           AND origem_historico = 'proposta'
         """,
         (oportunidade_id,),
-    ).fetchone()
-    current = row_int(row, key=None, index=0, default=0)
+    ).fetchall()
+
+    current = 0
+    for row in rows:
+        version_value = row_value(row, key="versao", index=0)
+        current = max(current, parse_version_number(version_value))
+
     return current + 1
 
 
@@ -915,6 +934,64 @@ def get_proposta_status_dates_for_oportunidade(
 ) -> dict[str, str]:
     result = get_proposta_status_dates_by_oportunidade(conn, [oportunidade_id])
     return result.get(oportunidade_id, {})
+
+
+def get_oportunidade_versions_by_ids(
+    conn: sqlite3.Connection,
+    oportunidade_ids: list[int],
+) -> dict[int, int]:
+    if not oportunidade_ids:
+        return {}
+
+    placeholders = ", ".join(["?" for _ in oportunidade_ids])
+    query = f"""
+        SELECT oportunidade_id_ref, versao
+        FROM oportunidades_erp_historico
+        WHERE oportunidade_id_ref IN ({placeholders})
+          AND origem_historico = 'oportunidade'
+    """
+    rows = conn.execute(query, tuple(oportunidade_ids)).fetchall()
+
+    result: dict[int, int] = {}
+    for row in rows:
+        opp_id = row_int(row, key="oportunidade_id_ref", index=0, default=0)
+        if opp_id <= 0:
+            continue
+        version_value = row_value(row, key="versao", index=1)
+        version_num = parse_version_number(version_value)
+        if version_num <= 0:
+            continue
+        result[opp_id] = max(result.get(opp_id, 0), version_num)
+    return result
+
+
+def get_proposta_versions_by_ids(
+    conn: sqlite3.Connection,
+    oportunidade_ids: list[int],
+) -> dict[int, int]:
+    if not oportunidade_ids:
+        return {}
+
+    placeholders = ", ".join(["?" for _ in oportunidade_ids])
+    query = f"""
+        SELECT oportunidade_id_ref, versao
+        FROM oportunidades_erp_historico
+        WHERE oportunidade_id_ref IN ({placeholders})
+          AND origem_historico = 'proposta'
+    """
+    rows = conn.execute(query, tuple(oportunidade_ids)).fetchall()
+
+    result: dict[int, int] = {}
+    for row in rows:
+        opp_id = row_int(row, key="oportunidade_id_ref", index=0, default=0)
+        if opp_id <= 0:
+            continue
+        version_value = row_value(row, key="versao", index=1)
+        version_num = parse_version_number(version_value)
+        if version_num <= 0:
+            continue
+        result[opp_id] = max(result.get(opp_id, 0), version_num)
+    return result
 
 
 def get_or_create_status_cliente_id(conn: sqlite3.Connection, status_nome: str) -> int:
@@ -1253,10 +1330,20 @@ def list_oportunidades() -> Any:
             (limit,),
         ).fetchall()
 
+        oportunidade_ids = [row_int(r, key="oportunidade_id", index=0, default=0) for r in rows]
+        versions_by_opp = get_oportunidade_versions_by_ids(
+            conn,
+            [opp_id for opp_id in oportunidade_ids if opp_id > 0],
+        )
+
     payload: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
-        item["versao_atual"] = format_version_label(item.get("versao_atual"))
+        opp_id = row_int(row, key="oportunidade_id", index=0, default=0)
+        versao_oportunidade = versions_by_opp.get(opp_id)
+        if versao_oportunidade is None or versao_oportunidade <= 0:
+            versao_oportunidade = 1
+        item["versao_atual"] = format_version_label(versao_oportunidade)
         payload.append(item)
     return jsonify(payload)
 
@@ -1274,15 +1361,6 @@ def list_oportunidades_go() -> Any:
                 o.id_oportunidade,
                 o.codigo_proposta,
                 o.versao_atual,
-                COALESCE(
-                    (
-                        SELECT MAX(hp.versao)
-                        FROM oportunidades_erp_historico hp
-                        WHERE hp.oportunidade_id_ref = o.oportunidade_id
-                          AND hp.origem_historico = 'proposta'
-                    ),
-                    1
-                ) AS versao_proposta_atual,
                 o.data_entrada,
                 o.data_envio,
                 c.nome AS cliente_nome,
@@ -1330,11 +1408,13 @@ def list_oportunidades_go() -> Any:
 
         opp_ids = [int(row["oportunidade_id"]) for row in rows]
         status_dates_by_opp = get_proposta_status_dates_by_oportunidade(conn, opp_ids)
+        proposta_versions_by_opp = get_proposta_versions_by_ids(conn, opp_ids)
 
     payload: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
-        item["versao_proposta_atual"] = format_version_label(item.get("versao_proposta_atual"))
+        versao_proposta = proposta_versions_by_opp.get(int(item["oportunidade_id"]), 1)
+        item["versao_proposta_atual"] = format_version_label(versao_proposta)
         item["status_datas"] = status_dates_by_opp.get(int(item["oportunidade_id"]), {})
         payload.append(item)
     return jsonify(payload)
@@ -1413,7 +1493,6 @@ def update_proposta_campos(oportunidade_id: int) -> Any:
                     valor = ?,
                     data_envio = ?,
                     observacao_proposta = ?,
-                    versao_atual = ?,
                     updated_at = ?
                 WHERE oportunidade_id = ?
                 """,
@@ -1424,7 +1503,6 @@ def update_proposta_campos(oportunidade_id: int) -> Any:
                     to_float(data.get("valor")),
                     data_envio,
                     normalize_text(data.get("observacao_proposta")),
-                    int(exists["versao_atual"]) + 1,
                     datetime.now().isoformat(timespec="seconds"),
                     oportunidade_id,
                 ),
